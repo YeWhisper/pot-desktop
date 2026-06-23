@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
     createLmStudioHeaders,
+    expandCodeIdentifierForTranslation,
     getChatCompletionsUrl,
     getModelsUrl,
     LM_STUDIO_DEFAULT_PROMPT_LIST,
@@ -15,18 +16,12 @@ import { Language } from './language.js';
 test('normalizes LM Studio base URLs to one v1 segment', () => {
     assert.equal(normalizeBaseUrl('http://localhost:1234'), 'http://localhost:1234/v1');
     assert.equal(normalizeBaseUrl('http://localhost:1234/v1/'), 'http://localhost:1234/v1');
-    assert.equal(
-        normalizeBaseUrl('http://localhost:1234/v1/chat/completions'),
-        'http://localhost:1234/v1'
-    );
+    assert.equal(normalizeBaseUrl('http://localhost:1234/v1/chat/completions'), 'http://localhost:1234/v1');
 });
 
 test('builds the LM Studio model and chat endpoints', () => {
     assert.equal(getModelsUrl('http://localhost:1234'), 'http://localhost:1234/v1/models');
-    assert.equal(
-        getChatCompletionsUrl('http://localhost:1234/v1'),
-        'http://localhost:1234/v1/chat/completions'
-    );
+    assert.equal(getChatCompletionsUrl('http://localhost:1234/v1'), 'http://localhost:1234/v1/chat/completions');
 });
 
 test('only sends bearer authorization for a non-empty token', () => {
@@ -107,4 +102,18 @@ test('uses Chinese language names for LM Studio prompt variables', () => {
         uk: '乌克兰语',
         he: '希伯来语',
     });
+});
+
+test('expands single code identifiers before LM Studio translation', () => {
+    assert.equal(expandCodeIdentifierForTranslation('getScheduler'), 'get scheduler');
+    assert.equal(expandCodeIdentifierForTranslation('GetScheduler'), 'get scheduler');
+    assert.equal(expandCodeIdentifierForTranslation('get_scheduler'), 'get scheduler');
+    assert.equal(expandCodeIdentifierForTranslation('get-scheduler'), 'get scheduler');
+    assert.equal(expandCodeIdentifierForTranslation('DEFAULT_SCHEDULER'), 'default scheduler');
+});
+
+test('does not rewrite prose or non-identifier text before LM Studio translation', () => {
+    assert.equal(expandCodeIdentifierForTranslation('hello world'), 'hello world');
+    assert.equal(expandCodeIdentifierForTranslation('scheduler'), 'scheduler');
+    assert.equal(expandCodeIdentifierForTranslation('getScheduler()'), 'getScheduler()');
 });

@@ -3,6 +3,21 @@ export const LM_STUDIO_DEFAULT_PROMPT_LIST = [
     { role: 'user', content: '把以下内容从 $from 翻译成 $to：$text' },
 ];
 
+export function expandCodeIdentifierForTranslation(text) {
+    const value = typeof text === 'string' ? text.trim() : '';
+    if (!value || /\s/.test(value) || !/^[A-Za-z][A-Za-z0-9_-]*$/.test(value)) return text;
+
+    const expanded = value
+        .replace(/[_-]+/g, ' ')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+        .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return expanded.includes(' ') ? expanded : value;
+}
+
 export function normalizeBaseUrl(input) {
     let value = input.trim();
     if (!/^https?:\/\//i.test(value)) value = `http://${value}`;
