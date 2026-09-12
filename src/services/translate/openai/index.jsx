@@ -9,7 +9,9 @@ function looksLikeOllamaEndpoint(path) {
 }
 
 export async function translate(text, from, to, options) {
-    const { config, setResult, detect } = options;
+    const { config, setResult, detect, signal } = options;
+
+    signal?.throwIfAborted();
 
     let { service, requestPath, model, apiKey, stream, promptList, requestArguments } = config;
 
@@ -20,6 +22,7 @@ export async function translate(text, from, to, options) {
     // openai-compatible 实例如果指向本地 ollama，先唤醒它再发请求
     if (looksLikeOllamaEndpoint(requestPath)) {
         await ensureOllamaReady(new URL(requestPath).origin);
+        signal?.throwIfAborted();
     }
 
     const apiUrl = new URL(requestPath);
@@ -70,8 +73,10 @@ export async function translate(text, from, to, options) {
                 method: 'POST',
                 headers: headers,
                 body: JSON.stringify(body),
+                signal,
             });
         } catch (e) {
+            signal?.throwIfAborted();
             // dev 模式下 webview CORS 常导致 TypeError: Failed to fetch；
             // 退化成 Tauri 的非流式 fetch 重试一次，确保至少能拿到结果
             if (e instanceof TypeError) {

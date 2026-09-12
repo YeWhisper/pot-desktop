@@ -448,6 +448,16 @@
                 }
             },
             "tts": {
+                "edge_tts": {
+                    "title": "Edge TTS（微软语音）",
+                    "description": "支持中文和英文，自动使用对应语言的声音。需要联网，无需 API Key。将此服务拖到语音服务列表首位即可用于朗读。",
+                    "chineseVoice": "中文声音",
+                    "englishVoice": "英文声音",
+                    "preview": "试听",
+                    "zh-CN-XiaoxiaoNeural": "晓晓 · 普通话女声",
+                    "en-US-JennyNeural": "Jenny · 美式英语女声",
+                    "en-GB-SoniaNeural": "Sonia · 英式英语女声"
+                },
                 "lingva_tts": {
                     "title": "Lingva",
                     "request_path": "请求地址"

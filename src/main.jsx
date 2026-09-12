@@ -18,8 +18,10 @@ if (import.meta.env.PROD) {
 
 initStore().then(async () => {
     await initEnv();
-    warmupOllama(); // fire-and-forget, don't await
-    warmupLMStudio();
+    if (appWindow.label === 'translate') {
+        warmupOllama(); // fire-and-forget, don't await
+        warmupLMStudio();
+    }
     const rootElement = document.getElementById('root');
     const root = ReactDOM.createRoot(rootElement);
     root.render(

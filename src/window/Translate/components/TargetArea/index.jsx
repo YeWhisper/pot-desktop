@@ -28,7 +28,6 @@ import Database from 'tauri-plugin-sql-api';
 import { GiCycle } from 'react-icons/gi';
 import { useTheme } from 'next-themes';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { nanoid } from 'nanoid';
 import { useSpring, animated } from '@react-spring/web';
 import useMeasure from 'react-use-measure';
 
@@ -39,7 +38,9 @@ import { sourceTextAtom, detectLanguageAtom, inlineTranslateAtom } from '../Sour
 import { invoke_plugin } from '../../../../utils/invoke_plugin';
 import * as builtinServices from '../../../../services/translate';
 import * as builtinTtsServices from '../../../../services/tts';
+import { store } from '../../../../utils/store';
 import { cacheInlineTranslatePair } from '../../inlineTranslateCache';
+import { createTranslationRequest } from '../../translation_request';
 
 import { info, error as logError } from 'tauri-plugin-log-api';
 import {
@@ -50,8 +51,6 @@ import {
     getServiceSouceType,
     whetherPluginService,
 } from '../../../../utils/service_instance';
-
-let translateID = [];
 
 export default function TargetArea(props) {
     const {
@@ -97,6 +96,10 @@ export default function TargetArea(props) {
     const toastStyle = useToastStyle();
     const speak = useVoice();
     const theme = useTheme();
+    const activeRequest = useRef(null);
+    const resultOptions = useRef();
+    resultOptions.current = { autoCopy, hideWindow, clipboardMonitor, historyDisable };
+    const configReady = autoCopy !== null && hideWindow !== null && clipboardMonitor !== null;
 
     useEffect(() => {
         if (error) {
@@ -108,13 +111,12 @@ export default function TargetArea(props) {
     useEffect(() => {
         setResult('');
         setError('');
+        setIsLoading(false);
         if (
             sourceText.trim() !== '' &&
             sourceLanguage &&
             targetLanguage &&
-            autoCopy !== null &&
-            hideWindow !== null &&
-            clipboardMonitor !== null
+            configReady
         ) {
             if (autoCopy === 'source' && !clipboardMonitor) {
                 writeText(sourceText).then(() => {
@@ -125,14 +127,13 @@ export default function TargetArea(props) {
             }
             translate();
         }
+        return () => activeRequest.current?.cancel();
     }, [
         sourceText,
         sourceLanguage,
         targetLanguage,
-        autoCopy,
-        hideWindow,
         currentTranslateServiceInstanceKey,
-        clipboardMonitor,
+        configReady,
     ]);
 
     // todo: history panel use service instance key
@@ -186,8 +187,9 @@ export default function TargetArea(props) {
     };
 
     const translate = async () => {
-        let id = nanoid();
-        translateID[index] = id;
+        activeRequest.current?.cancel();
+        const request = createTranslationRequest(setResult);
+        activeRequest.current = request;
 
         const translateServiceName = getServiceName(currentTranslateServiceInstanceKey);
 
@@ -204,20 +206,23 @@ export default function TargetArea(props) {
                 instanceConfig['enable'] = 'true';
                 const setHideOnce = invokeOnce(setHide);
                 let [func, utils] = await invoke_plugin('translate', translateServiceName);
+                if (!request.isActive()) return;
                 func(sourceText.trim(), pluginInfo.language[sourceLanguage], pluginInfo.language[newTargetLanguage], {
                     config: instanceConfig,
                     detect: detectLanguage,
+                    signal: request.signal,
                     setResult: (v) => {
-                        if (translateID[index] !== id) return;
-                        setResult(v);
+                        if (!request.isActive()) return;
+                        request.update(v);
                         setHideOnce(false);
                     },
                     utils,
                 }).then(
                     (v) => {
                         info(`[${currentTranslateServiceInstanceKey}]resolve:` + v);
-                        if (translateID[index] !== id) return;
-                        setResult(typeof v === 'string' ? v.trim() : v);
+                        if (!request.isActive()) return;
+                        request.finish(typeof v === 'string' ? v.trim() : v);
+                        const { autoCopy, hideWindow, clipboardMonitor, historyDisable } = resultOptions.current;
                         setIsLoading(false);
                         handleInlineTranslateResult(v);
                         if (v !== '') {
@@ -258,7 +263,8 @@ export default function TargetArea(props) {
                     },
                     (e) => {
                         info(`[${currentTranslateServiceInstanceKey}]reject:` + e);
-                        if (translateID[index] !== id) return;
+                        if (!request.isActive()) return;
+                        request.cancel();
                         setError(e.toString());
                         setIsLoading(false);
                         if (inlineTranslate && index === 0) {
@@ -287,17 +293,19 @@ export default function TargetArea(props) {
                     .translate(sourceText.trim(), LanguageEnum[sourceLanguage], LanguageEnum[newTargetLanguage], {
                         config: instanceConfig,
                         detect: detectLanguage,
+                        signal: request.signal,
                         setResult: (v) => {
-                            if (translateID[index] !== id) return;
-                            setResult(v);
+                            if (!request.isActive()) return;
+                            request.update(v);
                             setHideOnce(false);
                         },
                     })
                     .then(
                         (v) => {
                             info(`[${currentTranslateServiceInstanceKey}]resolve:` + v);
-                            if (translateID[index] !== id) return;
-                            setResult(typeof v === 'string' ? v.trim() : v);
+                            if (!request.isActive()) return;
+                            request.finish(typeof v === 'string' ? v.trim() : v);
+                            const { autoCopy, hideWindow, clipboardMonitor, historyDisable } = resultOptions.current;
                             setIsLoading(false);
                             handleInlineTranslateResult(v);
                             if (v !== '') {
@@ -338,7 +346,8 @@ export default function TargetArea(props) {
                         },
                         (e) => {
                             info(`[${currentTranslateServiceInstanceKey}]reject:` + e);
-                            if (translateID[index] !== id) return;
+                            if (!request.isActive()) return;
+                            request.cancel();
                             setError(e.toString());
                             setIsLoading(false);
                             if (inlineTranslate && index === 0) {
@@ -400,12 +409,12 @@ export default function TargetArea(props) {
                 config: pluginConfig,
                 utils,
             });
-            speak(data);
+            await speak(data);
         } else {
             if (!(targetLanguage in builtinTtsServices[getServiceName(instanceKey)].Language)) {
                 throw new Error('Language not supported');
             }
-            const instanceConfig = serviceInstanceConfigMap[instanceKey];
+            const instanceConfig = (await store.get(instanceKey)) ?? {};
             let data = await builtinTtsServices[getServiceName(instanceKey)].tts(
                 result,
                 builtinTtsServices[getServiceName(instanceKey)].Language[targetLanguage],
@@ -413,7 +422,7 @@ export default function TargetArea(props) {
                     config: instanceConfig,
                 }
             );
-            speak(data);
+            await speak(data);
         }
     };
 
@@ -558,9 +567,9 @@ export default function TargetArea(props) {
                         ) : (
                             <div>
                                 {result['pronunciations'] &&
-                                    result['pronunciations'].map((pronunciation) => {
+                                    result['pronunciations'].map((pronunciation, index) => {
                                         return (
-                                            <div key={nanoid()}>
+                                            <div key={index}>
                                                 {pronunciation['region'] && (
                                                     <span
                                                         className={`text-[${appFontSize}px] mr-[12px] text-default-500`}
@@ -579,7 +588,9 @@ export default function TargetArea(props) {
                                                     <HiOutlineVolumeUp
                                                         className={`text-[${appFontSize}px] inline-block my-auto cursor-pointer`}
                                                         onClick={() => {
-                                                            speak(pronunciation['voice']);
+                                                            speak(pronunciation['voice']).catch((e) => {
+                                                                toast.error(e.toString(), { style: toastStyle });
+                                                            });
                                                         }}
                                                     />
                                                 )}
@@ -587,13 +598,13 @@ export default function TargetArea(props) {
                                         );
                                     })}
                                 {result['explanations'] &&
-                                    result['explanations'].map((explanations) => {
+                                    result['explanations'].map((explanations, index) => {
                                         return (
-                                            <div key={nanoid()}>
+                                            <div key={index}>
                                                 {explanations['explains'] &&
                                                     explanations['explains'].map((explain, index) => {
                                                         return (
-                                                            <span key={nanoid()}>
+                                                            <span key={index}>
                                                                 {index === 0 ? (
                                                                     <>
                                                                         <span
@@ -611,7 +622,6 @@ export default function TargetArea(props) {
                                                                 ) : (
                                                                     <span
                                                                         className={`text-[${appFontSize - 2}px] text-default-500 select-text mr-1`}
-                                                                        key={nanoid()}
                                                                     >
                                                                         {explain}
                                                                     </span>
@@ -624,9 +634,9 @@ export default function TargetArea(props) {
                                     })}
                                 <br />
                                 {result['associations'] &&
-                                    result['associations'].map((association) => {
+                                    result['associations'].map((association, index) => {
                                         return (
-                                            <div key={nanoid()}>
+                                            <div key={index}>
                                                 <span className={`text-[${appFontSize}px] text-default-500`}>
                                                     {association}
                                                 </span>
@@ -636,7 +646,7 @@ export default function TargetArea(props) {
                                 {result['sentence'] &&
                                     result['sentence'].map((sentence, index) => {
                                         return (
-                                            <div key={nanoid()}>
+                                            <div key={index}>
                                                 <span className={`text-[${appFontSize - 2}px] mr-[12px]`}>
                                                     {index + 1}.
                                                 </span>

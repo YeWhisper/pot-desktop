@@ -1,5 +1,5 @@
 import { useLocation, useRoutes } from 'react-router-dom';
-import React, { useEffect, useState } from 'react';
+import React, { Suspense, useEffect, useState } from 'react';
 import { appWindow } from '@tauri-apps/api/window';
 import { Card, Divider } from '@nextui-org/react';
 import { useTranslation } from 'react-i18next';
@@ -73,7 +73,7 @@ export default function Config() {
                         osType === 'Linux' ? 'h-[calc(100vh-38px)]' : 'h-[calc(100vh-36px)]'
                     }`}
                 >
-                    {page}
+                    <Suspense fallback={null}>{page}</Suspense>
                 </div>
             </div>
         </>

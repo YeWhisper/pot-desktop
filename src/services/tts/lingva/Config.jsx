@@ -18,7 +18,7 @@ export function Config(props) {
         instanceKey,
         {
             [INSTANCE_NAME_CONFIG_KEY]: t('services.tts.lingva_tts.title'),
-            requestPath: 'lingva.pot-app.com',
+            requestPath: 'lingva.ml',
         },
         { sync: false }
     );

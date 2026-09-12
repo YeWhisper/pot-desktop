@@ -227,12 +227,12 @@ export default function SourceArea(props) {
                 config: pluginConfig,
                 utils,
             });
-            speak(data);
+            await speak(data);
         } else {
             if (!(detected in builtinTtsServices[getServiceName(instanceKey)].Language)) {
                 throw new Error('Language not supported');
             }
-            const instanceConfig = serviceInstanceConfigMap[instanceKey];
+            const instanceConfig = (await store.get(instanceKey)) ?? {};
             let data = await builtinTtsServices[getServiceName(instanceKey)].tts(
                 sourceText,
                 builtinTtsServices[getServiceName(instanceKey)].Language[detected],
@@ -240,7 +240,7 @@ export default function SourceArea(props) {
                     config: instanceConfig,
                 }
             );
-            speak(data);
+            await speak(data);
         }
     };
 

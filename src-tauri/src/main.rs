@@ -5,6 +5,7 @@ mod backup;
 mod clipboard;
 mod cmd;
 mod config;
+mod edge_tts;
 mod error;
 mod hotkey;
 mod lang_detect;
@@ -172,6 +173,7 @@ fn main() {
             font_list,
             start_ollama_serve,
             start_lmstudio_server,
+            edge_tts::edge_tts,
             aliyun
         ])
         .on_system_tray_event(tray_event_handler)

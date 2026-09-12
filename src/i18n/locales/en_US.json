@@ -448,6 +448,16 @@
                 }
             },
             "tts": {
+                "edge_tts": {
+                    "title": "Edge TTS (Microsoft Speech)",
+                    "description": "Reads Chinese and English with the selected voice for each language. Requires internet, no API key. Drag this service to the top of the speech service list to use it.",
+                    "chineseVoice": "Chinese voice",
+                    "englishVoice": "English voice",
+                    "preview": "Preview",
+                    "zh-CN-XiaoxiaoNeural": "Xiaoxiao · Mandarin (female)",
+                    "en-US-JennyNeural": "Jenny · American English (female)",
+                    "en-GB-SoniaNeural": "Sonia · British English (female)"
+                },
                 "lingva_tts": {
                     "title": "Lingva",
                     "request_path": "Request Path"

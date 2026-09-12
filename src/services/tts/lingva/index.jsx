@@ -3,10 +3,10 @@ import { fetch } from '@tauri-apps/api/http';
 export async function tts(text, lang, options = {}) {
     const { config } = options;
 
-    let { requestPath = 'lingva.pot-app.com' } = config;
+    let { requestPath = 'lingva.ml' } = config;
 
     if (requestPath.length === 0) {
-        requestPath = 'lingva.pot-app.com';
+        requestPath = 'lingva.ml';
     }
 
     if (!requestPath.startsWith('http')) {

@@ -6,7 +6,7 @@
     "scripts": {
         "dev": "vite",
         "build": "vite build",
-        "test": "node --test src/services/translate/lmstudio/api.test.js src/services/translate/openai/headers.test.js src/utils/lmstudio_warmup.test.js src/window/Translate/service_order.test.js",
+        "test": "node --test src/services/translate/lmstudio/api.test.js src/services/translate/openai/headers.test.js src/utils/lmstudio_warmup.test.js src/window/Translate/service_order.test.js src/services/tts/edge/voices.test.js src/hooks/useVoice.test.js src/app_lifecycle.test.js src/window/Translate/performance.test.js",
         "preview": "vite preview",
         "tauri": "tauri",
         "updater": "node updater/updater.mjs",

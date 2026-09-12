@@ -27,7 +27,7 @@ pub fn start_clipboard_monitor(app_handle: tauri::AppHandle) {
                     break;
                 }
             }
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
     });
 }

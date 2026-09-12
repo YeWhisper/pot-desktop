@@ -2,19 +2,20 @@ import { appWindow } from '@tauri-apps/api/window';
 import { BrowserRouter } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { warn } from 'tauri-plugin-log-api';
-import React, { useEffect } from 'react';
+import React, { lazy, Suspense, useEffect } from 'react';
 import { useTheme } from 'next-themes';
 
 import { invoke } from '@tauri-apps/api/tauri';
-import Screenshot from './window/Screenshot';
-import Translate from './window/Translate';
-import Recognize from './window/Recognize';
-import Updater from './window/Updater';
 import { store } from './utils/store';
-import Config from './window/Config';
 import { useConfig } from './hooks';
 import './style.css';
 import './i18n';
+
+const Translate = lazy(() => import('./window/Translate'));
+const Screenshot = lazy(() => import('./window/Screenshot'));
+const Recognize = lazy(() => import('./window/Recognize'));
+const Config = lazy(() => import('./window/Config'));
+const Updater = lazy(() => import('./window/Updater'));
 
 const windowMap = {
     translate: <Translate />,
@@ -39,36 +40,23 @@ export default function App() {
     }, []);
 
     useEffect(() => {
-        if (devMode !== null && devMode) {
-            document.addEventListener('keydown', async (e) => {
-                let allowKeys = ['c', 'v', 'x', 'a', 'z', 'y'];
-                if (e.ctrlKey && !allowKeys.includes(e.key.toLowerCase())) {
-                    e.preventDefault();
-                }
-                if (e.key === 'F12') {
-                    await invoke('open_devtools');
-                }
-                if (e.key.startsWith('F') && e.key.length > 1) {
-                    e.preventDefault();
-                }
-                if (e.key === 'Escape') {
-                    await appWindow.close();
-                }
-            });
-        } else {
-            document.addEventListener('keydown', async (e) => {
-                let allowKeys = ['c', 'v', 'x', 'a', 'z', 'y'];
-                if (e.ctrlKey && !allowKeys.includes(e.key.toLowerCase())) {
-                    e.preventDefault();
-                }
-                if (e.key.startsWith('F') && e.key.length > 1) {
-                    e.preventDefault();
-                }
-                if (e.key === 'Escape') {
-                    await appWindow.close();
-                }
-            });
-        }
+        const handleKeyDown = async (e) => {
+            const allowKeys = ['c', 'v', 'x', 'a', 'z', 'y'];
+            if (e.ctrlKey && !allowKeys.includes(e.key.toLowerCase())) {
+                e.preventDefault();
+            }
+            if (devMode && e.key === 'F12') {
+                await invoke('open_devtools');
+            }
+            if (e.key.startsWith('F') && e.key.length > 1) {
+                e.preventDefault();
+            }
+            if (e.key === 'Escape') {
+                await appWindow.close();
+            }
+        };
+        document.addEventListener('keydown', handleKeyDown);
+        return () => document.removeEventListener('keydown', handleKeyDown);
     }, [devMode]);
 
     useEffect(() => {
@@ -77,18 +65,11 @@ export default function App() {
                 setTheme(appTheme);
             } else {
                 try {
-                    if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-                        setTheme('dark');
-                    } else {
-                        setTheme('light');
-                    }
-                    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
-                        if (e.matches) {
-                            setTheme('dark');
-                        } else {
-                            setTheme('light');
-                        }
-                    });
+                    const media = window.matchMedia('(prefers-color-scheme: dark)');
+                    const updateTheme = (e) => setTheme(e.matches ? 'dark' : 'light');
+                    updateTheme(media);
+                    media.addEventListener('change', updateTheme);
+                    return () => media.removeEventListener('change', updateTheme);
                 } catch {
                     warn("Can't detect system theme.");
                 }
@@ -113,5 +94,9 @@ export default function App() {
         }
     }, [appFont, appFallbackFont, appFontSize]);
 
-    return <BrowserRouter>{windowMap[appWindow.label]}</BrowserRouter>;
+    return (
+        <BrowserRouter>
+            <Suspense fallback={null}>{windowMap[appWindow.label]}</Suspense>
+        </BrowserRouter>
+    );
 }
