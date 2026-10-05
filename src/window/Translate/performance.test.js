@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 import { createTranslationRequest } from './translation_request.js';
+import { SOURCE_LANGUAGE } from './state.js';
+import { setImmediate as settle } from 'node:timers/promises';
 
 function parse(path) {
     return ts.createSourceFile(
@@ -44,14 +46,14 @@ test('cancellation aborts the transport signal and discards pending and late cal
 });
 
 // Run the actual component logic and effect dependencies, without a WebView or build.
-function targetArea() {
+function targetArea({ plugin = false } = {}) {
     const file = parse('./components/TargetArea/index.jsx');
     const component = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name.text === 'TargetArea');
     const body = component.body.statements
         .filter((node) => !ts.isReturnStatement(node))
         .map((node) => node.getText(file));
     const config = { history_disable: true };
-    const atoms = { sourceText: 'hello', sourceLanguage: 'en', targetLanguage: 'zh', detectLanguage: 'en' };
+    const atoms = { sourceText: 'hello', targetLanguage: 'zh' };
     const requests = [];
     const copies = [];
     const hooks = [];
@@ -59,7 +61,12 @@ function targetArea() {
     let effects = [];
     let previous;
     const context = vm.createContext({
-        props: { index: 0, name: 'openai', serviceInstanceConfigMap: { openai: {} } },
+        props: {
+            name: 'openai',
+            isPrimaryService: true,
+            serviceInstanceConfigMap: { openai: {} },
+            pluginList: { translate: { openai: { language: { en: 'English', zh: 'Chinese' } } } },
+        },
         useState(initial) {
             const index = cursor++;
             if (!(index in hooks)) hooks[index] = initial;
@@ -74,25 +81,30 @@ function targetArea() {
         useAtomValue: (atom) => atoms[atom],
         useSetAtom: () => () => {},
         sourceTextAtom: 'sourceText',
-        sourceLanguageAtom: 'sourceLanguage',
+        SOURCE_LANGUAGE,
         targetLanguageAtom: 'targetLanguage',
-        detectLanguageAtom: 'detectLanguage',
         inlineTranslateAtom: 'inlineTranslate',
         useTranslation: () => ({ t: (key) => key }),
         useToastStyle() {},
         useVoice() {},
-        useTheme() {},
+        useTheme: () => ({ resolvedTheme: 'light' }),
         useMeasure: () => [null, { height: 0 }],
         useSpring() {},
+        useTextareaHeight() {},
         getServiceName: (value) => value,
-        whetherPluginService: () => false,
+        whetherPluginService: () => plugin,
+        invoke_plugin: async () => [
+            (text, from, to, options) =>
+                new Promise((resolve, reject) => requests.push({ text, from, to, options, resolve, reject })),
+            {},
+        ],
         createTranslationRequest,
         builtinServices: {
             openai: {
                 Language: { en: 'English', zh: 'Chinese' },
                 translate: (text, from, to, options) =>
                     new Promise((resolve, reject) => {
-                        requests.push({ text, options, resolve, reject });
+                        requests.push({ text, from, to, options, resolve, reject });
                     }),
             },
         },
@@ -143,7 +155,7 @@ test('copy/window settings do not request another translation and completion use
     area.render();
     assert.equal(area.requests.length, 1);
     area.requests[0].resolve('translated');
-    await Promise.resolve();
+    await settle();
     assert.deepEqual(area.copies, ['translated']);
     area.unmount();
 });
@@ -158,9 +170,9 @@ test('replacement, empty input and unmount discard obsolete translations', async
     area.render();
     assert.equal(old.options.signal.aborted, true);
     area.requests[1].resolve('new final');
-    await Promise.resolve();
+    await settle();
     old.resolve('old final');
-    await Promise.resolve();
+    await settle();
     t.mock.timers.tick(100);
     assert.equal(area.render().result, 'new final');
     area.atoms.sourceText = '';
@@ -174,8 +186,162 @@ test('replacement, empty input and unmount discard obsolete translations', async
     assert.equal(area.requests[2].options.signal.aborted, true);
 });
 
+test('English is used for every input and old source/detection preferences cannot override it', async () => {
+    const area = targetArea();
+    area.config.translate_source_language = 'ja';
+    area.config.translate_detect_engine = 'baidu';
+    for (const text of ['Hello', '你好', 'こんにちは', '中文 and English']) {
+        area.atoms.sourceText = text;
+        area.render();
+        const request = area.requests.at(-1);
+        assert.equal(request.from, 'English');
+        assert.equal(request.options.detect, 'en');
+        assert.equal(request.to, 'Chinese');
+        request.resolve('译文');
+        await settle();
+    }
+    area.unmount();
+});
+
+test('plugin translation has the same English source, retry and cancellation behavior', async () => {
+    const area = targetArea({ plugin: true });
+    area.render();
+    await settle();
+    const first = area.requests[0];
+    assert.equal(first.from, 'English');
+    first.reject(new Error('network unavailable'));
+    await settle();
+    assert.match(area.render().error, /network unavailable/);
+    const retried = area.render().translate();
+    await settle();
+    area.requests[1].resolve('recovered');
+    await retried;
+    assert.equal(area.render().result, 'recovered');
+    assert.equal(area.render().error, '');
+    area.unmount();
+    assert.equal(area.requests[1].options.signal.aborted, true);
+});
+
+function sourceArea(config = {}) {
+    const file = parse('./components/SourceArea/index.jsx');
+    const component = file.statements.find((node) => ts.isFunctionDeclaration(node) && node.name.text === 'SourceArea');
+    const body = component.body.statements
+        .filter((node) => !ts.isReturnStatement(node))
+        .map((node) => node.getText(file));
+    const hooks = [];
+    const atoms = {};
+    const listeners = new Map();
+    let cursor;
+    let effects;
+    let resolveOcr;
+    const context = vm.createContext({
+        props: { pluginList: {}, serviceInstanceConfigMap: {} },
+        useState(initial) {
+            const index = cursor++;
+            if (!(index in hooks)) hooks[index] = initial;
+            return [hooks[index], (value) => (hooks[index] = value)];
+        },
+        useRef(initial) {
+            const index = cursor++;
+            return (hooks[index] ??= { current: initial });
+        },
+        useEffect: (run, deps) => effects.push({ run, deps }),
+        useSetAtom: (atom) => (value) => (atoms[atom] = value),
+        useConfig: (key, fallback) => [key in config ? config[key] : fallback],
+        useTranslation: () => ({ t: (key) => key }),
+        useToastStyle() {},
+        useVoice() {},
+        SOURCE_LANGUAGE,
+        useTextareaHeight() {},
+        sourceTextAtom: 'sourceText',
+        inlineTranslateAtom: 'inline',
+        setTimeout,
+        clearTimeout,
+        appWindow: { hide() {}, show() {}, setFocus() {}, close() {} },
+        listen: async (event, callback) => {
+            listeners.set(event, callback);
+            return () => listeners.delete(event);
+        },
+        invoke: async () => '',
+        getCachedInlineTranslate: () => null,
+        getServiceName: (key) => key,
+        getServiceSouceType: () => 'builtin',
+        ServiceSourceType: { PLUGIN: 'plugin' },
+        recognizeServices: {
+            system: {
+                Language: { auto: 'auto' },
+                recognize: () => new Promise((resolve) => (resolveOcr = resolve)),
+            },
+        },
+        toast: { error() {} },
+    });
+    vm.runInContext(
+        `globalThis.render = () => { ${body.join('\n')}\n return { sourceText, changeSourceText, submitSourceText, handleNewText }; };`,
+        context
+    );
+    return {
+        atoms,
+        listeners,
+        resolveOcr: (text) => resolveOcr(text),
+        render() {
+            cursor = 0;
+            effects = [];
+            return context.render();
+        },
+        mount() {
+            this.render();
+            return effects.find((effect) => effect.run.toString().includes("listen('new_text'")).run();
+        },
+    };
+}
+
+test('dynamic input debounces across renders; clearing and unmount cancel queued submissions', (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const area = sourceArea({ dynamic_translate: true });
+    const cleanup = area.mount();
+    area.render().changeSourceText('first');
+    t.mock.timers.tick(500);
+    area.render().changeSourceText('latest');
+    t.mock.timers.tick(500);
+    assert.equal(area.atoms.sourceText, undefined);
+    t.mock.timers.tick(500);
+    assert.equal(area.atoms.sourceText, 'latest');
+    area.render().changeSourceText('queued');
+    area.render().changeSourceText('');
+    t.mock.timers.tick(1000);
+    assert.equal(area.atoms.sourceText, '');
+    area.render().changeSourceText('unmounted');
+    cleanup();
+    t.mock.timers.tick(1000);
+    assert.equal(area.atoms.sourceText, '');
+});
+
+test('selection and manual submission use current text immediately, including rapid incremental input', async () => {
+    const area = sourceArea({ incremental_translate: true });
+    const source = area.render();
+    await source.handleNewText('one');
+    await source.handleNewText('two');
+    assert.equal(area.atoms.sourceText, 'one two');
+    area.render().changeSourceText('手动输入');
+    area.render().submitSourceText();
+    assert.equal(area.atoms.sourceText, '手动输入');
+});
+
+test('late OCR cannot overwrite a newer selection and input mode clears the submitted text', async () => {
+    const area = sourceArea();
+    const pending = area.render().handleNewText('[IMAGE_TRANSLATE]');
+    await settle();
+    await area.render().handleNewText('new selection');
+    area.resolveOcr('stale OCR');
+    await pending;
+    assert.equal(area.atoms.sourceText, 'new selection');
+    await area.render().handleNewText('[INPUT_TRANSLATE]');
+    assert.equal(area.atoms.sourceText, '');
+    assert.equal(area.atoms.inline, false);
+});
+
 function autoFit({ monitor, resize } = {}) {
-    const file = parse('./index.jsx');
+    const file = parse('./useAutoFitWindow.js');
     let effect;
     function visit(node) {
         if (
@@ -310,7 +476,7 @@ test('resize requests remain serial and use latest dimensions after an in-flight
     await first;
     const second = fit.frame();
     assert.equal(fit.calls.sizes.length, 2);
-    assert.equal(fit.calls.sizes[1].height, 435);
+    assert.equal(fit.calls.sizes[1].height, 434);
     release();
     await second;
     fit.cleanup();

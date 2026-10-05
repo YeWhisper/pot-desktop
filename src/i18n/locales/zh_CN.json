@@ -125,7 +125,7 @@
                 "close_on_blur": "失去焦点时关闭窗口",
                 "always_on_top": "窗口默认置顶",
                 "hide_source": "隐藏原文",
-                "hide_language": "隐藏语言栏",
+                "hide_language": "隐藏语言切换器",
                 "hide_window": "隐藏翻译窗口",
                 "detect_engine": "语种检测引擎",
                 "baidu": "百度",
@@ -476,6 +476,14 @@
             }
         },
         "translate": {
+            "fixed_english": "固定英语 · 不检测语种",
+            "expand_result": "展开译文",
+            "collapse_result": "收起译文",
+            "input_placeholder": "输入或粘贴原文，Enter 翻译",
+            "pin": "置顶窗口",
+            "unpin": "取消置顶",
+            "close": "关闭窗口",
+            "drag_service": "拖动调整服务顺序",
             "translate": "翻译",
             "add_collection_success": "添加成功",
             "recognizing": "识别中…",

@@ -125,7 +125,7 @@
                 "close_on_blur": "Close window when focus lost",
                 "always_on_top": "Always on Top",
                 "hide_source": "Hide Source Area",
-                "hide_language": "Hide Language Area",
+                "hide_language": "Hide Language Selector",
                 "hide_window": "Hide Translation Window",
                 "detect_engine": "Language Detection Engine",
                 "baidu": "Baidu",
@@ -476,6 +476,14 @@
             }
         },
         "translate": {
+            "fixed_english": "Always English · detection off",
+            "expand_result": "Expand translation",
+            "collapse_result": "Collapse translation",
+            "input_placeholder": "Type or paste text, Enter to translate",
+            "pin": "Pin window",
+            "unpin": "Unpin window",
+            "close": "Close window",
+            "drag_service": "Drag to reorder services",
             "translate": "Translate",
             "add_collection_success": "Add to collection successfully",
             "recognizing": "Recognizing…",

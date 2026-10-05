@@ -1,11 +1,11 @@
-import { Button, Card, CardBody, CardFooter, ButtonGroup, Chip, Tooltip, Spacer } from '@nextui-org/react';
+import { Button, Card, CardBody, CardFooter, ButtonGroup, Tooltip } from '@nextui-org/react';
 import { BaseDirectory, readTextFile } from '@tauri-apps/api/fs';
 import React, { useEffect, useRef, useState } from 'react';
 import { writeText } from '@tauri-apps/api/clipboard';
 import { HiOutlineVolumeUp } from 'react-icons/hi';
 import { BiCollapseVertical, BiExpandVertical } from 'react-icons/bi';
 import { appWindow } from '@tauri-apps/api/window';
-import toast, { Toaster } from 'react-hot-toast';
+import toast from 'react-hot-toast';
 import { listen } from '@tauri-apps/api/event';
 import { MdContentCopy } from 'react-icons/md';
 import { MdSmartButton } from 'react-icons/md';
@@ -13,30 +13,27 @@ import { useTranslation } from 'react-i18next';
 import { HiTranslate } from 'react-icons/hi';
 import { LuDelete } from 'react-icons/lu';
 import { invoke } from '@tauri-apps/api';
-import { atom, useAtom, useSetAtom } from 'jotai';
+import { useSetAtom } from 'jotai';
 import { getServiceName, getServiceSouceType, ServiceSourceType } from '../../../../utils/service_instance';
-import { useConfig, useSyncAtom, useVoice, useToastStyle } from '../../../../hooks';
+import { useConfig, useVoice, useToastStyle } from '../../../../hooks';
 import { invoke_plugin } from '../../../../utils/invoke_plugin';
 import * as recognizeServices from '../../../../services/recognize';
 import * as builtinTtsServices from '../../../../services/tts';
-import detect from '../../../../utils/lang_detect';
 import { store } from '../../../../utils/store';
-import { info } from 'tauri-plugin-log-api';
-import { debug } from 'tauri-plugin-log-api';
 import { getCachedInlineTranslate } from '../../inlineTranslateCache';
 
-export const sourceTextAtom = atom('');
-export const detectLanguageAtom = atom('');
-export const inlineTranslateAtom = atom(false);
-
-let unlisten = null;
-let timer = null;
+import { SOURCE_LANGUAGE, sourceTextAtom, inlineTranslateAtom } from '../../state';
+import { useTextareaHeight } from '../../useTextareaHeight';
 
 export default function SourceArea(props) {
     const { pluginList, serviceInstanceConfigMap } = props;
     const [appFontSize] = useConfig('app_font_size', 16);
-    const [sourceText, setSourceText, syncSourceText] = useSyncAtom(sourceTextAtom);
-    const [detectLanguage, setDetectLanguage] = useAtom(detectLanguageAtom);
+    const sourceFontSize = (appFontSize || 16) + 4;
+    const [sourceText, setSourceTextState] = useState('');
+    const sourceTextRef = useRef('');
+    const setSubmittedText = useSetAtom(sourceTextAtom);
+    const sourceTextChangeTimer = useRef(null);
+    const incomingTextVersion = useRef(0);
     const [incrementalTranslate] = useConfig('incremental_translate', false);
     const [dynamicTranslate] = useConfig('dynamic_translate', false);
     const setInlineTranslate = useSetAtom(inlineTranslateAtom);
@@ -55,20 +52,49 @@ export default function SourceArea(props) {
     const lastInlineTranslateRef = useRef(false);
     const speak = useVoice();
 
-    const handleNewText = async (text) => {
-        text = text.trim();
-        // Ignore empty text from get_text useEffect — prevents
-        // clearing inline translate text before translation completes
-        if (!text) return;
-        // Check for inline translate marker - don't show window
-        let isInline = false;
-        if (text.startsWith('[INLINE_TRANSLATE]')) {
-            isInline = true;
-            text = text.substring('[INLINE_TRANSLATE]'.length).trim();
+    const setSourceText = (text) => {
+        sourceTextRef.current = text;
+        setSourceTextState(text);
+    };
+
+    const submitSourceText = (text = sourceTextRef.current) => {
+        clearTimeout(sourceTextChangeTimer.current);
+        setSubmittedText(text);
+    };
+
+    const acceptText = (text, append = false) => {
+        const normalized = deleteNewline ? text.replace(/\-\s+/g, '').replace(/\s+/g, ' ').trim() : text.trim();
+        const nextText = append ? `${sourceTextRef.current} ${normalized}`.trim() : normalized;
+        setSourceText(nextText);
+        submitSourceText(nextText);
+        setSourceCollapsed(true);
+    };
+
+    const recognizeImage = async () => {
+        const base64 = await invoke('get_base64');
+        const instanceKey = recognizeServiceList[0];
+        const serviceName = getServiceName(instanceKey);
+        const config = serviceInstanceConfigMap[instanceKey];
+        if (getServiceSouceType(instanceKey) === ServiceSourceType.PLUGIN) {
+            const language = pluginList.recognize[serviceName].language;
+            if (!(recognizeLanguage in language)) throw new Error('Language not supported');
+            const [recognize, utils] = await invoke_plugin('recognize', serviceName);
+            return recognize(base64, language[recognizeLanguage], { config, utils });
         }
-        if (isInline) {
-            appWindow.hide();
-        } else if (hideWindow) {
+        const service = recognizeServices[serviceName];
+        if (!(recognizeLanguage in service.Language)) throw new Error('Language not supported');
+        return service.recognize(base64, service.Language[recognizeLanguage], { config });
+    };
+
+    const handleNewText = async (value) => {
+        let text = value.trim();
+        if (!text) return;
+        const version = ++incomingTextVersion.current;
+        clearTimeout(sourceTextChangeTimer.current);
+        const isInline = text.startsWith('[INLINE_TRANSLATE]');
+        if (isInline) text = text.substring('[INLINE_TRANSLATE]'.length).trim();
+        setInlineTranslate(isInline);
+        if (isInline || (hideWindow && text !== '[INPUT_TRANSLATE]')) {
             appWindow.hide();
         } else {
             appWindow.show();
@@ -78,145 +104,60 @@ export default function SourceArea(props) {
             const cachedText = getCachedInlineTranslate(text);
             if (cachedText) {
                 setInlineTranslate(false);
-                lastInlineTranslateRef.current = false;
+                lastInlineTranslateRef.current = true;
+                submitSourceText('');
                 await invoke('inline_paste', { text: cachedText });
                 return;
             }
         }
-        // 清空检测语言
-        setDetectLanguage('');
         if (text === '[INPUT_TRANSLATE]') {
-            setWindowType('[INPUT_TRANSLATE]');
-            appWindow.show();
-            appWindow.setFocus();
-            setSourceText('', true);
-        } else if (text === '[IMAGE_TRANSLATE]') {
-            setWindowType('[IMAGE_TRANSLATE]');
-            const base64 = await invoke('get_base64');
-            const serviceInstanceKey = recognizeServiceList[0];
-            if (getServiceSouceType(serviceInstanceKey) === ServiceSourceType.PLUGIN) {
-                if (recognizeLanguage in pluginList['recognize'][getServiceName(serviceInstanceKey)].language) {
-                    const pluginConfig = serviceInstanceConfigMap[serviceInstanceKey];
-
-                    let [func, utils] = await invoke_plugin('recognize', getServiceName(serviceInstanceKey));
-                    func(
-                        base64,
-                        pluginList['recognize'][getServiceName(serviceInstanceKey)].language[recognizeLanguage],
-                        {
-                            config: pluginConfig,
-                            utils,
-                        }
-                    ).then(
-                        (v) => {
-                            let newText = v.trim();
-                            if (deleteNewline) {
-                                newText = v.replace(/\-\s+/g, '').replace(/\s+/g, ' ');
-                            } else {
-                                newText = v.trim();
-                            }
-                            if (incrementalTranslate) {
-                                setSourceText((old) => {
-                                    return old + ' ' + newText;
-                                });
-                            } else {
-                                setSourceText(newText);
-                            }
-                            detect_language(newText).then(() => {
-                                syncSourceText();
-                            });
-                        },
-                        (e) => {
-                            setSourceText(e.toString());
-                        }
-                    );
-                } else {
-                    setSourceText('Language not supported');
-                }
-            } else {
-                if (recognizeLanguage in recognizeServices[getServiceName(serviceInstanceKey)].Language) {
-                    const instanceConfig = serviceInstanceConfigMap[serviceInstanceKey];
-                    recognizeServices[getServiceName(serviceInstanceKey)]
-                        .recognize(
-                            base64,
-                            recognizeServices[getServiceName(serviceInstanceKey)].Language[recognizeLanguage],
-                            {
-                                config: instanceConfig,
-                            }
-                        )
-                        .then(
-                            (v) => {
-                                let newText = v.trim();
-                                if (deleteNewline) {
-                                    newText = v.replace(/\-\s+/g, '').replace(/\s+/g, ' ');
-                                } else {
-                                    newText = v.trim();
-                                }
-                                if (incrementalTranslate) {
-                                    setSourceText((old) => {
-                                        return old + ' ' + newText;
-                                    });
-                                } else {
-                                    setSourceText(newText);
-                                }
-                                detect_language(newText).then(() => {
-                                    syncSourceText();
-                                });
-                            },
-                            (e) => {
-                                setSourceText(e.toString());
-                            }
-                        );
-                } else {
-                    setSourceText('Language not supported');
-                }
+            setWindowType(text);
+            setSourceText('');
+            submitSourceText('');
+            setSourceCollapsed(false);
+            lastInlineTranslateRef.current = false;
+            return;
+        }
+        if (text === '[IMAGE_TRANSLATE]') {
+            setWindowType(text);
+            submitSourceText('');
+            try {
+                const recognizedText = await recognizeImage();
+                if (version !== incomingTextVersion.current) return;
+                acceptText(recognizedText, incrementalTranslate && !lastInlineTranslateRef.current);
+            } catch (error) {
+                if (version !== incomingTextVersion.current) return;
+                setSourceText(error.toString());
+                toast.error(error.toString(), { style: toastStyle });
             }
         } else {
             setWindowType('[SELECTION_TRANSLATE]');
-            if (isInline) {
-                setInlineTranslate(true);
-                lastInlineTranslateRef.current = true;
-            }
-            let newText = text.trim();
-            if (deleteNewline) {
-                newText = text.replace(/\-\s+/g, '').replace(/\s+/g, ' ');
-            } else {
-                newText = text.trim();
-            }
-            if (incrementalTranslate && !isInline && !lastInlineTranslateRef.current) {
-                setSourceText((old) => old + ' ' + newText);
-            } else {
-                setSourceText(newText);
-            }
-            // 新文本到达时始终回到 2 行收起态
-            setSourceCollapsed(true);
-            if (!isInline) {
-                lastInlineTranslateRef.current = false;
-            }
-            detect_language(newText).then(() => {
-                syncSourceText();
-            });
+            acceptText(text, incrementalTranslate && !isInline && !lastInlineTranslateRef.current);
         }
+        lastInlineTranslateRef.current = isInline;
     };
 
     const keyDown = (event) => {
         if (event.key === 'Enter' && !event.shiftKey) {
             event.preventDefault();
-            detect_language(sourceText).then(() => {
-                syncSourceText();
-            });
+            submitSourceText();
         }
-        if (event.key === 'Escape') {
-            appWindow.close();
+        if (event.key === 'Escape') appWindow.close();
+        if (event.altKey && event.shiftKey && event.code === 'KeyU') {
+            event.preventDefault();
+            const input = event.currentTarget;
+            const { selectionStart, selectionEnd, value } = input;
+            const converted = transformVarName(value.substring(selectionStart, selectionEnd));
+            changeSourceText(value.substring(0, selectionStart) + converted + value.substring(selectionEnd));
+            requestAnimationFrame(() => {
+                textAreaRef.current?.setSelectionRange(selectionStart, selectionStart + converted.length);
+            });
         }
     };
 
     const handleSpeak = async () => {
         const instanceKey = ttsServiceList[0];
-        let detected = detectLanguage;
-        if (detected === '') {
-            detected = await detect(sourceText);
-            setDetectLanguage(detected);
-        }
+        const detected = SOURCE_LANGUAGE;
         if (getServiceSouceType(instanceKey) === ServiceSourceType.PLUGIN) {
             if (!(detected in ttsPluginInfo.language)) {
                 throw new Error('Language not supported');
@@ -244,29 +185,33 @@ export default function SourceArea(props) {
         }
     };
 
+    const handleNewTextRef = useRef(handleNewText);
+    handleNewTextRef.current = handleNewText;
+    const ready = [deleteNewline, incrementalTranslate, recognizeLanguage, recognizeServiceList, hideWindow].every(
+        (value) => value !== null
+    );
     useEffect(() => {
-        if (hideWindow !== null) {
-            if (unlisten) {
-                unlisten.then((f) => {
-                    f();
-                });
-            }
-            unlisten = listen('new_text', (event) => {
-                const text = event.payload ?? '';
-                const isInline = text.startsWith('[INLINE_TRANSLATE]');
-                // Clear the previous source text BEFORE focusing the window,
-                // so a fresh Alt+E never briefly shows leftover content from
-                // the previous Alt+Q / Alt+E session. Inline path keeps the
-                // window hidden so the flash is invisible there anyway, but
-                // resetting is still cheaper than reasoning about staleness.
-                if (!isInline) {
-                    setSourceText('', true);
-                    appWindow.setFocus();
-                }
-                handleNewText(text);
+        if (!ready) return;
+        let disposed = false;
+        let receivedText = false;
+        const unlisten = listen('new_text', (event) => {
+            if (disposed) return;
+            receivedText = true;
+            void handleNewTextRef.current(event.payload ?? '');
+        });
+        unlisten.then(() => {
+            if (disposed) return;
+            invoke('get_text').then((text) => {
+                if (!disposed && !receivedText) void handleNewTextRef.current(text);
             });
-        }
-    }, [hideWindow]);
+        });
+        return () => {
+            disposed = true;
+            incomingTextVersion.current++;
+            clearTimeout(sourceTextChangeTimer.current);
+            unlisten.then((cleanup) => cleanup());
+        };
+    }, [ready]);
 
     useEffect(() => {
         if (ttsServiceList && getServiceSouceType(ttsServiceList[0]) === ServiceSourceType.PLUGIN) {
@@ -278,47 +223,15 @@ export default function SourceArea(props) {
         }
     }, [ttsServiceList]);
 
-    useEffect(() => {
-        if (
-            deleteNewline !== null &&
-            incrementalTranslate !== null &&
-            recognizeLanguage !== null &&
-            recognizeServiceList !== null &&
-            hideWindow !== null
-        ) {
-            invoke('get_text').then((v) => {
-                handleNewText(v);
-            });
-        }
-    }, [deleteNewline, incrementalTranslate, recognizeLanguage, recognizeServiceList, hideWindow]);
+    useTextareaHeight(textAreaRef, sourceText, sourceFontSize, sourceCollapsed);
 
-    useEffect(() => {
-        if (!textAreaRef.current) return;
-        if (sourceCollapsed) {
-            textAreaRef.current.style.height = '40px';
-        } else {
-            textAreaRef.current.style.height = '40px';
-            textAreaRef.current.style.height = textAreaRef.current.scrollHeight + 'px';
-        }
-    }, [sourceText, sourceCollapsed]);
-
-    const detect_language = async (text) => {
-        setDetectLanguage(await detect(text));
-    };
-
-    let sourceTextChangeTimer = null;
-    const changeSourceText = async (text) => {
-        setDetectLanguage('');
-        await setSourceText(text);
-        if (dynamicTranslate) {
-            if (sourceTextChangeTimer) {
-                clearTimeout(sourceTextChangeTimer);
-            }
-            sourceTextChangeTimer = setTimeout(() => {
-                detect_language(text).then(() => {
-                    syncSourceText();
-                });
-            }, 1000);
+    const changeSourceText = (text) => {
+        incomingTextVersion.current++;
+        setSourceText(text);
+        clearTimeout(sourceTextChangeTimer.current);
+        if (!text.trim()) submitSourceText('');
+        else if (dynamicTranslate) {
+            sourceTextChangeTimer.current = setTimeout(() => submitSourceText(text), 1000);
         }
     };
 
@@ -401,37 +314,21 @@ export default function SourceArea(props) {
 
         return str2;
     };
-    useEffect(() => {
-        textAreaRef.current.addEventListener('keydown', async (event) => {
-            if (event.altKey && event.shiftKey && event.code === 'KeyU') {
-                const originText = textAreaRef.current.value;
-                const selectionStart = textAreaRef.current.selectionStart;
-                const selectionEnd = textAreaRef.current.selectionEnd;
-                const selectionText = originText.substring(selectionStart, selectionEnd);
-
-                const convertedText = transformVarName(selectionText);
-                const targetText =
-                    originText.substring(0, selectionStart) + convertedText + originText.substring(selectionEnd);
-
-                await changeSourceText(targetText);
-                textAreaRef.current.selectionStart = selectionStart;
-                textAreaRef.current.selectionEnd = selectionStart + convertedText.length;
-            }
-        });
-    }, [textAreaRef]);
-
     return (
-        <div className={hideSource && windowType !== '[INPUT_TRANSLATE]' && 'hidden'}>
+        <div className={hideSource && windowType !== '[INPUT_TRANSLATE]' ? 'hidden' : ''}>
             <Card
                 shadow='none'
-                className='bg-content1 rounded-[10px] mt-[1px] pb-0'
+                className='paper-source'
             >
-                <Toaster />
-                <CardBody className='bg-content1 p-[12px] pb-0 max-h-[40vh] overflow-y-auto'>
+                <CardBody className='paper-source-body max-h-[40vh] overflow-y-auto'>
                     <textarea
                         autoFocus
                         ref={textAreaRef}
-                        className={`text-[${appFontSize}px] bg-content1 h-full resize-none outline-none`}
+                        rows={1}
+                        aria-label={t('config.translate.source')}
+                        placeholder={t('translate.input_placeholder')}
+                        style={{ fontSize: sourceFontSize, lineHeight: 1.4 }}
+                        className='paper-source-text w-full resize-none bg-transparent outline-none'
                         value={sourceText}
                         onKeyDown={keyDown}
                         onChange={(e) => {
@@ -441,11 +338,13 @@ export default function SourceArea(props) {
                     />
                 </CardBody>
 
-                <CardFooter className='bg-content1 rounded-none rounded-b-[10px] flex justify-between px-[12px] p-[5px]'>
+                <CardFooter className='paper-source-actions'>
                     <div className='flex justify-start'>
-                        <ButtonGroup className='mr-[5px]'>
+                        <ButtonGroup className='gap-0'>
                             <Tooltip content={t('translate.speak')}>
                                 <Button
+                                    aria-label={t('translate.speak')}
+                                    isDisabled={!sourceText.trim()}
                                     isIconOnly
                                     variant='light'
                                     size='sm'
@@ -460,6 +359,8 @@ export default function SourceArea(props) {
                             </Tooltip>
                             <Tooltip content={t('translate.copy')}>
                                 <Button
+                                    aria-label={t('translate.copy')}
+                                    isDisabled={!sourceText.trim()}
                                     isIconOnly
                                     variant='light'
                                     size='sm'
@@ -472,15 +373,15 @@ export default function SourceArea(props) {
                             </Tooltip>
                             <Tooltip content={t('translate.delete_newline')}>
                                 <Button
+                                    aria-label={t('translate.delete_newline')}
+                                    isDisabled={!sourceText.trim()}
                                     isIconOnly
                                     variant='light'
                                     size='sm'
                                     onPress={() => {
                                         const newText = sourceText.replace(/\-\s+/g, '').replace(/\s+/g, ' ');
                                         setSourceText(newText);
-                                        detect_language(newText).then(() => {
-                                            syncSourceText();
-                                        });
+                                        submitSourceText(newText);
                                     }}
                                 >
                                     <MdSmartButton className='text-[16px]' />
@@ -488,6 +389,7 @@ export default function SourceArea(props) {
                             </Tooltip>
                             <Tooltip content={t(sourceCollapsed ? 'translate.expand' : 'translate.collapse')}>
                                 <Button
+                                    aria-label={t(sourceCollapsed ? 'translate.expand' : 'translate.collapse')}
                                     variant='light'
                                     size='sm'
                                     isIconOnly
@@ -505,47 +407,36 @@ export default function SourceArea(props) {
                             </Tooltip>
                             <Tooltip content={t('common.clear')}>
                                 <Button
+                                    aria-label={t('common.clear')}
                                     variant='light'
                                     size='sm'
                                     isIconOnly
                                     isDisabled={sourceText === ''}
                                     onPress={() => {
-                                        setSourceText('');
+                                        changeSourceText('');
                                     }}
                                 >
                                     <LuDelete className='text-[16px]' />
                                 </Button>
                             </Tooltip>
                         </ButtonGroup>
-                        {detectLanguage !== '' && (
-                            <Chip
-                                size='sm'
-                                color='secondary'
-                                variant='dot'
-                                className='my-auto'
-                            >
-                                {t(`languages.${detectLanguage}`)}
-                            </Chip>
-                        )}
                     </div>
                     <Tooltip content={t('translate.translate')}>
                         <Button
                             size='sm'
                             color='primary'
-                            variant='light'
-                            isIconOnly
-                            className='text-[14px] font-bold'
+                            variant='flat'
+                            isDisabled={!sourceText.trim()}
+                            aria-label={t('translate.translate')}
+                            className='min-w-0 px-2 font-medium'
                             startContent={<HiTranslate className='text-[16px]' />}
-                            onPress={() => {
-                                detect_language(sourceText).then(() => {
-                                    syncSourceText();
-                                });
-                            }}
-                        />
+                            onPress={() => submitSourceText()}
+                        >
+                            {t('translate.translate')}
+                        </Button>
                     </Tooltip>
                 </CardFooter>
             </Card>
-            <Spacer y={1} />
         </div>
     );
 }
