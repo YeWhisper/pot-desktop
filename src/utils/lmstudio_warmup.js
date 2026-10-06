@@ -46,6 +46,10 @@ async function loadModel(entry, target) {
 
 let inflightWarmup = null;
 
+export async function waitForLmStudioWarmup() {
+    await inflightWarmup;
+}
+
 export function warmupLMStudio() {
     if (!inflightWarmup) {
         inflightWarmup = (async () => {
