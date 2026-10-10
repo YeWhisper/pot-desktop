@@ -13,6 +13,7 @@ use tauri::SystemTrayMenu;
 use tauri::SystemTrayMenuItem;
 use tauri::SystemTraySubmenu;
 use tauri::{AppHandle, Manager};
+use tauri_plugin_autostart::ManagerExt;
 
 #[tauri::command]
 pub fn update_tray(app_handle: tauri::AppHandle, mut language: String, mut copy_mode: String) {
@@ -292,6 +293,14 @@ fn on_restart_as_admin_click(app: &AppHandle) {
 
 const ADMIN_AUTOSTART_TASK: &str = "PotAppAdminAutostart";
 
+#[tauri::command]
+pub fn enable_normal_autostart(app: AppHandle) -> Result<(), String> {
+    if admin_autostart_enabled() {
+        return Err("Administrator autostart is already enabled. Disable it in the tray menu first.".to_string());
+    }
+    app.autolaunch().enable().map_err(|e| e.to_string())
+}
+
 #[cfg(target_os = "windows")]
 fn admin_autostart_enabled() -> bool {
     use std::os::windows::process::CommandExt;
@@ -310,7 +319,7 @@ fn admin_autostart_enabled() -> bool {
 }
 
 #[cfg(target_os = "windows")]
-fn set_admin_autostart(enable: bool) -> Result<(), String> {
+fn set_admin_autostart(app: &AppHandle, enable: bool) -> Result<(), String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     if enable {
@@ -341,7 +350,7 @@ fn set_admin_autostart(enable: bool) -> Result<(), String> {
                 String::from_utf8_lossy(&output.stderr).trim()
             ));
         }
-        Ok(())
+        app.autolaunch().disable().map_err(|e| e.to_string())
     } else {
         let _ = std::process::Command::new("schtasks")
             .args(["/Delete", "/TN", ADMIN_AUTOSTART_TASK, "/F"])
@@ -352,14 +361,14 @@ fn set_admin_autostart(enable: bool) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn set_admin_autostart(_enable: bool) -> Result<(), String> {
+fn set_admin_autostart(_app: &AppHandle, _enable: bool) -> Result<(), String> {
     Err("admin autostart is Windows-only".to_string())
 }
 
 fn on_admin_autostart_click(app: &AppHandle) {
     let currently_enabled = admin_autostart_enabled();
     let target = !currently_enabled;
-    match set_admin_autostart(target) {
+    match set_admin_autostart(app, target) {
         Ok(()) => {
             let actual = admin_autostart_enabled();
             info!("admin_autostart toggled to {} (verified={})", target, actual);

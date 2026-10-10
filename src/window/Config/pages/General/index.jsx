@@ -1,4 +1,4 @@
-import { enable, isEnabled, disable } from 'tauri-plugin-autostart-api';
+import { isEnabled, disable } from 'tauri-plugin-autostart-api';
 import { DropdownTrigger } from '@nextui-org/react';
 import React, { useState, useEffect } from 'react';
 import toast, { Toaster } from 'react-hot-toast';
@@ -86,16 +86,17 @@ export default function General() {
                         <h3>{t('config.general.auto_start')}</h3>
                         <Switch
                             isSelected={autoStart}
-                            onValueChange={(v) => {
-                                setAutoStart(v);
-                                if (v) {
-                                    enable().then(() => {
-                                        info('Auto start enabled');
-                                    });
-                                } else {
-                                    disable().then(() => {
-                                        info('Auto start disabled');
-                                    });
+                            onValueChange={async (v) => {
+                                try {
+                                    if (v) {
+                                        await invoke('enable_normal_autostart');
+                                    } else {
+                                        await disable();
+                                    }
+                                    setAutoStart(await isEnabled());
+                                    info(`Auto start ${v ? 'enabled' : 'disabled'}`);
+                                } catch (error) {
+                                    toast.error(String(error), { style: toastStyle });
                                 }
                             }}
                         />

@@ -11,6 +11,8 @@ mod hotkey;
 mod lang_detect;
 mod screenshot;
 mod server;
+#[cfg(target_os = "windows")]
+mod single_instance;
 mod system_ocr;
 mod tray;
 mod updater;
@@ -43,6 +45,19 @@ pub static APP: OnceCell<tauri::AppHandle> = OnceCell::new();
 pub struct StringWrapper(pub Mutex<String>);
 
 fn main() {
+    #[cfg(target_os = "windows")]
+    let _instance = match single_instance::acquire(
+        "Local\\com.pot-app.desktop",
+        std::time::Duration::from_secs(3),
+    ) {
+        Ok(Some(guard)) => guard,
+        Ok(None) => return,
+        Err(error) => {
+            eprintln!("Failed to acquire Pot single-instance guard: {error}");
+            return;
+        }
+    };
+
     tauri::Builder::default()
         // FIXME: single-instance plugin crashes on Win11 26200
         // .plugin(tauri_plugin_single_instance::init(|app, _, cwd| {
@@ -164,6 +179,7 @@ fn main() {
             inline_paste,
             register_shortcut_by_frontend,
             update_tray,
+            enable_normal_autostart,
             updater_window,
             screenshot,
             lang_detect,
